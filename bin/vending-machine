@@ -1,0 +1,15 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+require __DIR__ . '/../vendor/autoload.php';
+
+use Symfony\Component\Console\Application;
+use VendingMachine\Infrastructure\Cli\VendingMachineCommand;
+
+$app = new Application('Vending Machine', '1.0.0');
+$command = new VendingMachineCommand();
+$app->add($command);
+$app->setDefaultCommand($command->getName() ?? 'vending-machine', true);
+$app->run();
