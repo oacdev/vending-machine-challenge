@@ -2,6 +2,7 @@
 .phpunit.cache/
 .phpstan.cache/
 .php-cs-fixer.cache
+.deptrac.cache
 .idea/
 .vscode/
 *.swp
