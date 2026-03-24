@@ -44,7 +44,7 @@ src/
 ### With Docker
 
 ```bash
-docker-compose run --rm app
+docker compose run --rm app
 ```
 
 ### Local
