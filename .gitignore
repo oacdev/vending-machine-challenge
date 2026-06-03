@@ -3,6 +3,7 @@
 .phpstan.cache/
 .php-cs-fixer.cache
 .deptrac.cache
+.codegraph/
 .idea/
 .vscode/
 *.swp

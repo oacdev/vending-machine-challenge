@@ -1,4 +1,4 @@
-# Vending Machine
+# Vending Machine by @oacdev - Oriol Alonso Clar
 
 A vending machine simulator built with **Domain-Driven Design** and **Hexagonal Architecture** in PHP 8.3.
 
