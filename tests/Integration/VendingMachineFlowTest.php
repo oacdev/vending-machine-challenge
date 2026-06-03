@@ -5,17 +5,34 @@ declare(strict_types=1);
 namespace VendingMachine\Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
-use VendingMachine\Application\VendingMachineService;
+use VendingMachine\Application\Command\InsertCoinCommand;
+use VendingMachine\Application\Command\InsertCoinHandler;
+use VendingMachine\Application\Command\ReturnCoinsCommand;
+use VendingMachine\Application\Command\ReturnCoinsHandler;
+use VendingMachine\Application\Command\SelectProductCommand;
+use VendingMachine\Application\Command\SelectProductHandler;
+use VendingMachine\Application\Command\ServiceMachineCommand;
+use VendingMachine\Application\Command\ServiceMachineHandler;
+use VendingMachine\Application\Query\GetMachineStateHandler;
+use VendingMachine\Application\Query\GetMachineStateQuery;
 use VendingMachine\Domain\Coin;
 use VendingMachine\Domain\CoinBank;
 use VendingMachine\Domain\Inventory;
 use VendingMachine\Domain\Product;
 use VendingMachine\Domain\VendingMachine;
 use VendingMachine\Domain\VendingResultType;
+use VendingMachine\Infrastructure\Persistence\InMemoryVendingMachineRepository;
 
 final class VendingMachineFlowTest extends TestCase
 {
-    private function createService(): VendingMachineService
+    private InMemoryVendingMachineRepository $repository;
+    private InsertCoinHandler $insertCoinHandler;
+    private SelectProductHandler $selectProductHandler;
+    private ReturnCoinsHandler $returnCoinsHandler;
+    private ServiceMachineHandler $serviceMachineHandler;
+    private GetMachineStateHandler $getMachineStateHandler;
+
+    protected function setUp(): void
     {
         $machine = new VendingMachine(
             CoinBank::withStock([
@@ -27,18 +44,21 @@ final class VendingMachineFlowTest extends TestCase
             Inventory::default(5),
         );
 
-        return new VendingMachineService($machine);
+        $this->repository = new InMemoryVendingMachineRepository($machine);
+        $this->insertCoinHandler = new InsertCoinHandler($this->repository);
+        $this->selectProductHandler = new SelectProductHandler($this->repository);
+        $this->returnCoinsHandler = new ReturnCoinsHandler($this->repository);
+        $this->serviceMachineHandler = new ServiceMachineHandler($this->repository);
+        $this->getMachineStateHandler = new GetMachineStateHandler($this->repository);
     }
 
     public function test_challenge_example_1_buy_soda_exact(): void
     {
-        $service = $this->createService();
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Dollar));
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Quarter));
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Quarter));
 
-        $service->handleInput('1.00');
-        $service->handleInput('0.25');
-        $service->handleInput('0.25');
-
-        $result = $service->handleInput('GET-SODA');
+        $result = $this->selectProductHandler->handle(new SelectProductCommand(Product::Soda));
 
         self::assertSame(VendingResultType::Dispensed, $result->type);
         self::assertSame(Product::Soda, $result->product);
@@ -47,12 +67,10 @@ final class VendingMachineFlowTest extends TestCase
 
     public function test_challenge_example_2_return_coins(): void
     {
-        $service = $this->createService();
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Dime));
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Dime));
 
-        $service->handleInput('0.10');
-        $service->handleInput('0.10');
-
-        $result = $service->handleInput('RETURN-COIN');
+        $result = $this->returnCoinsHandler->handle(new ReturnCoinsCommand());
 
         self::assertSame(VendingResultType::CoinsReturned, $result->type);
         self::assertSame([Coin::Dime, Coin::Dime], $result->change);
@@ -60,11 +78,9 @@ final class VendingMachineFlowTest extends TestCase
 
     public function test_challenge_example_3_buy_water_with_change(): void
     {
-        $service = $this->createService();
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Dollar));
 
-        $service->handleInput('1.00');
-
-        $result = $service->handleInput('GET-WATER');
+        $result = $this->selectProductHandler->handle(new SelectProductCommand(Product::Water));
 
         self::assertSame(VendingResultType::Dispensed, $result->type);
         self::assertSame(Product::Water, $result->product);
@@ -73,20 +89,16 @@ final class VendingMachineFlowTest extends TestCase
 
     public function test_sequential_flow_buy_then_buy_again(): void
     {
-        $service = $this->createService();
-
-        // First purchase
-        $service->handleInput('1.00');
-        $result1 = $service->handleInput('GET-JUICE');
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Dollar));
+        $result1 = $this->selectProductHandler->handle(new SelectProductCommand(Product::Juice));
 
         self::assertSame(VendingResultType::Dispensed, $result1->type);
         self::assertSame([], $result1->change);
 
-        // Second purchase
-        $service->handleInput('1.00');
-        $service->handleInput('0.25');
-        $service->handleInput('0.25');
-        $result2 = $service->handleInput('GET-SODA');
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Dollar));
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Quarter));
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Quarter));
+        $result2 = $this->selectProductHandler->handle(new SelectProductCommand(Product::Soda));
 
         self::assertSame(VendingResultType::Dispensed, $result2->type);
         self::assertSame([], $result2->change);
@@ -94,11 +106,9 @@ final class VendingMachineFlowTest extends TestCase
 
     public function test_insufficient_funds_error(): void
     {
-        $service = $this->createService();
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Quarter));
 
-        $service->handleInput('0.25');
-
-        $result = $service->handleInput('GET-WATER');
+        $result = $this->selectProductHandler->handle(new SelectProductCommand(Product::Water));
 
         self::assertSame(VendingResultType::Error, $result->type);
         self::assertStringContainsString('Insufficient', $result->message);
@@ -106,25 +116,25 @@ final class VendingMachineFlowTest extends TestCase
 
     public function test_out_of_stock_error(): void
     {
-        $service = new VendingMachineService(
-            new VendingMachine(
-                CoinBank::withStock([
-                    Coin::Nickel->value => 10,
-                    Coin::Dime->value => 10,
-                    Coin::Quarter->value => 10,
-                    Coin::Dollar->value => 10,
-                ]),
-                Inventory::withStock([
-                    Product::Water->value => 0,
-                    Product::Juice->value => 5,
-                    Product::Soda->value => 5,
-                ]),
-            ),
-        );
+        $repository = new InMemoryVendingMachineRepository(new VendingMachine(
+            CoinBank::withStock([
+                Coin::Nickel->value => 10,
+                Coin::Dime->value => 10,
+                Coin::Quarter->value => 10,
+                Coin::Dollar->value => 10,
+            ]),
+            Inventory::withStock([
+                Product::Water->value => 0,
+                Product::Juice->value => 5,
+                Product::Soda->value => 5,
+            ]),
+        ));
 
-        $service->handleInput('1.00');
+        $insertCoinHandler = new InsertCoinHandler($repository);
+        $selectProductHandler = new SelectProductHandler($repository);
 
-        $result = $service->handleInput('GET-WATER');
+        $insertCoinHandler->handle(new InsertCoinCommand(Coin::Dollar));
+        $result = $selectProductHandler->handle(new SelectProductCommand(Product::Water));
 
         self::assertSame(VendingResultType::Error, $result->type);
         self::assertStringContainsString('out of stock', $result->message);
@@ -132,68 +142,40 @@ final class VendingMachineFlowTest extends TestCase
 
     public function test_cannot_make_change_returns_coins(): void
     {
-        $service = new VendingMachineService(
-            new VendingMachine(
-                CoinBank::empty(),
-                Inventory::default(5),
-            ),
-        );
+        $repository = new InMemoryVendingMachineRepository(new VendingMachine(
+            CoinBank::empty(),
+            Inventory::default(5),
+        ));
 
-        $service->handleInput('1.00');
+        $insertCoinHandler = new InsertCoinHandler($repository);
+        $selectProductHandler = new SelectProductHandler($repository);
 
-        $result = $service->handleInput('GET-WATER');
+        $insertCoinHandler->handle(new InsertCoinCommand(Coin::Dollar));
+        $result = $selectProductHandler->handle(new SelectProductCommand(Product::Water));
 
         self::assertSame(VendingResultType::CoinsReturned, $result->type);
         self::assertSame([Coin::Dollar], $result->change);
     }
 
-    public function test_unknown_product_error(): void
-    {
-        $service = $this->createService();
-
-        $result = $service->handleInput('GET-PIZZA');
-
-        self::assertSame(VendingResultType::Error, $result->type);
-        self::assertStringContainsString('Unknown product', $result->message);
-    }
-
-    public function test_unknown_command_error(): void
-    {
-        $service = $this->createService();
-
-        $result = $service->handleInput('HELLO');
-
-        self::assertSame(VendingResultType::Error, $result->type);
-        self::assertStringContainsString('Unknown command', $result->message);
-    }
-
     public function test_service_command_resets_machine(): void
     {
-        $service = $this->createService();
+        $this->insertCoinHandler->handle(new InsertCoinCommand(Coin::Dollar));
+        $this->selectProductHandler->handle(new SelectProductCommand(Product::Juice));
 
-        // Deplete some stock
-        $service->handleInput('1.00');
-        $service->handleInput('GET-JUICE');
-
-        $state = $service->getMachine()->getState();
+        $state = $this->getMachineStateHandler->handle(new GetMachineStateQuery());
         self::assertSame(4, $state['inventory']->getCount(Product::Juice));
 
-        // Service resets
-        $service->handleInput('SERVICE');
+        $this->serviceMachineHandler->handle(new ServiceMachineCommand(
+            CoinBank::withStock([
+                Coin::Nickel->value => 10,
+                Coin::Dime->value => 10,
+                Coin::Quarter->value => 10,
+                Coin::Dollar->value => 10,
+            ]),
+            Inventory::default(5),
+        ));
 
-        $state = $service->getMachine()->getState();
+        $state = $this->getMachineStateHandler->handle(new GetMachineStateQuery());
         self::assertSame(5, $state['inventory']->getCount(Product::Juice));
-    }
-
-    public function test_case_insensitive_input(): void
-    {
-        $service = $this->createService();
-
-        $service->handleInput('1.00');
-
-        $result = $service->handleInput('get-juice');
-
-        self::assertSame(VendingResultType::Dispensed, $result->type);
-        self::assertSame(Product::Juice, $result->product);
     }
 }
